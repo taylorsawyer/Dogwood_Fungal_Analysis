@@ -1,0 +1,320 @@
+---
+title: "DogwoodFungalAnalysis"
+author: "Taylor Sawyer"
+date: '2022-07-12'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Load packages
+```{r, eval = FALSE}
+library(dada2)
+library(ShortRead)
+library(Biostrings)
+library(vegan)
+library(plyr)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(ggvenn)
+library(phyloseq)
+library(microbiome)
+library(knitr)
+library(RColorBrewer)
+library(reshape)
+```
+
+# Input Directory and Paths
+```{r}
+# Pathway for asv table data
+unfiltered_asv_fungal <-read.table("/Users/taylorsawyer/Desktop/BiGG_Data/Dogwood_Experiment/Dogwood_Data/asv_table_fungal.txt",header = TRUE, sep = '\t')
+
+# Pathway for taxonomy table data
+unfiltered_taxonomy_fungal <- read.table("/Users/taylorsawyer/Desktop/BiGG_Data/Dogwood_Experiment/Dogwood_Data/unfiltered_taxonomy_fungal.txt",header = TRUE, sep = '\t')
+
+#Pathway for postburn metadata
+postburn_meta <- "/Users/taylorsawyer/Desktop/BiGG_Data/Dogwood_Experiment/Dogwood_Data/postburn_metadata_allniches.csv"
+postburn_meta <- read.delim(postburn_meta)
+```
+
+
+# Merge postburn and asv table
+```{r}
+# adjust row labeling on metadata  by removing the first row and making it the rownames
+reassigned.postburn <- postburn_meta[,-1]
+rownames(reassigned.postburn) <- postburn_meta[,1]
+
+# transpose asv table so asv info is the col names and samples are row names
+t.asv.table <- t(unfiltered_asv_fungal)
+
+# merge transposed asv table and postburn metadata by matching row names
+soiltable <- merge(t.asv.table,reassigned.postburn, by="row.names")
+
+# remove soil information to leave just the host niche information (roots, stems, bark, and leaves)
+removesoiltable = filter(soiltable, Niche %in% c("Roots", "Stem","Bark", "Leaves"))
+
+### FINAL ASV TABLE without extraneous character metadata
+asv.tab.fungal <- subset(removesoiltable, select = -c(Treatment, Niche, Tree, Plot))
+```
+
+# Fix axis labeling
+```{r}
+# remove X value character from col names
+colnames(unfiltered_asv_fungal)<-gsub("X","",colnames(unfiltered_asv_fungal))
+# remove ITS identification characters from col names
+colnames(unfiltered_asv_fungal)<-gsub("ITS","",colnames(unfiltered_asv_fungal))
+
+# adjust row names to be asv information 
+rownames(asv.tab.fungal)<-make.names(asv.tab.fungal[,1])
+asv.tab.fungal = subset(asv.tab.fungal, select = -c(Row.names))
+
+# remove X value from row names
+rownames(asv.tab.fungal)<-gsub("X","",rownames(asv.tab.fungal))
+```
+
+# Merge ASV and Taxas info
+```{r}
+# transpose the asv table to match taxa (sample names on col names and asv on row names)
+t.asv.table.nosoil<- t(asv.tab.fungal)
+
+# merge taxa and asv table information by row names 
+seqtab.tax.fungal<-merge(t.asv.table.nosoil,unfiltered_taxonomy_fungal, by="row.names")
+
+# adjust row names 
+rownames(seqtab.tax.fungal)<-make.names(seqtab.tax.fungal[,1])
+seqtab.tax.fungal = subset(seqtab.tax.fungal, select = -c(Row.names))
+```
+
+# Remove extraneous values by filtering 
+```{r}
+# remove NAs in data from Kingdom taxa
+taxa.na.omit.fungal<-seqtab.tax.fungal[-(which(is.na(seqtab.tax.fungal$Kingdom))),]
+
+# keep only fungal taxonomy for merging, so remove any kingdom that is not Fungi
+filt.taxa.na.omit.fungal <- filter(taxa.na.omit.fungal, Kingdom %in% c("k__Fungi"))
+```
+
+# Data Formatting for Vegan
+```{r}
+# This object contains only per sample ASV abundance data by removing the last 7 columns of taxa information
+onlyasv.tab.fungal<-filt.taxa.na.omit.fungal[,1:(length(taxa.na.omit.fungal)-7)]
+
+# transpose the file so samples are row names 
+t.asv.tab.fungal = t(onlyasv.tab.fungal)
+
+# This object only contains taxonomy info (keeping only the last 7 cols)
+onlyasv.tax.fungal<-filt.taxa.na.omit.fungal[,81:87]
+```
+
+# Rarefaction Curve
+```{r}
+#build rarefaction curve 
+anotherasv.rarecurve.fungal<-vegan::rarecurve(t.asv.tab.fungal)
+
+# view rarefaction curve in ggplot
+rarecurve<-function(x) attr(x,which="Subsample")
+rarecurve.attributes<-sapply(anotherasv.rarecurve.fungal,rarecurve)
+gPlot<-ggplot()
+for (i in 1:length(anotherasv.rarecurve.fungal)){
+  gPlot<-gPlot+geom_line(aes_(x=rarecurve.attributes[[i]], y=anotherasv.rarecurve.fungal[[i]]),size=1)
+}
+gPlot + #geom_vline(xintercept=min(colSums(integer.t.asv.tab.dw)), color="blue") 
+  + theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),   panel.background = element_blank(),
+  panel.border=element_rect(color="black", size=1, fill=NA))+
+  theme(axis.title.x=element_text(size=14, face="bold"))+
+  theme(axis.title.y=element_text(size=14, face="bold"))+
+  theme(axis.text.x=element_text(size=12, face="bold"))+
+  theme(axis.text.y=element_text(size=12, face="bold"))+labs(x=("Sequencing Depth"), y=expression(bold(paste("ASV Richness", sep=""))))
+
+# determine rarefication cutoff by removing samples with a low number of ASVs (removing samples with low sequencing region. decided to remove samples below the threshold)
+sort(colSums(onlyasv.tab.fungal))
+
+# transpose the data frame 
+t.onlyasv.tab.fungal <- as.data.frame(t(onlyasv.tab.fungal))
+
+# rarefy based on a sequencing depth of 10000 
+rare.asv.tab.dw <-as.data.frame(rrarefy(t.onlyasv.tab.fungal, sample= 10000))
+
+# subset the rarefied dataframe to remove unrarefied samples (those less than the minimum sequencing depth of 10000)
+rarefy_formatting<-function(rarefied_table,sample){
+  ds.rarefied<-as.data.frame(subset(rarefied_table, rowSums(rarefied_table)>=sample))
+  ds.rare.asv<-ds.rarefied[, colSums(ds.rarefied)>0]
+  return(ds.rare.asv)
+}
+
+# remove samples below this threshold
+new <- rarefy_formatting(rare.asv.tab.dw, 10000)
+
+# merge taxa information with rarefied samples by row name
+dw.met.rare.dada2<-merge(reassigned.postburn,new, by="row.names")
+
+```
+
+# Venn Diagram
+```{r}
+#removing extraneous metadata 
+dw.met.rare.dada2 = subset(dw.met.rare.dada2, select = -c(Treatment,Tree,Plot))
+
+# adjust row names to proper format
+rownames(dw.met.rare.dada2)<-make.names(dw.met.rare.dada2[,1])
+dw.met.rare.dada2 = subset(dw.met.rare.dada2, select = -c(Row.names))
+
+# remove the X character value from row names
+rownames(dw.met.rare.dada2)<-gsub("X","",rownames(dw.met.rare.dada2))
+
+#renaming data frame for data manipulation
+host.met.split<-dw.met.rare.dada2
+
+#splitting data frame into four new dataframes based on individual niche, then removing the niche column, then removing any zero-sum columns
+
+# separate rarefied data based on bark niche
+host.met.split.bark <- filter(dw.met.rare.dada2, Niche %in% c("Bark"))
+
+# remove niche character information 
+host.met.split.bark <- subset(host.met.split.bark, select = -c(Niche))
+
+# remove rows containing all 0's
+host.met.split.bark.final <- host.met.split.bark[,colSums(host.met.split.bark[])>0]
+
+# continue for remaining niches
+host.met.split.roots <- filter(dw.met.rare.dada2, Niche %in% c("Roots"))
+host.met.split.roots <- subset(host.met.split.roots, select = -c(Niche))
+host.met.split.roots.final <- host.met.split.roots[,colSums(host.met.split.roots[])>0]
+
+host.met.split.leaves <- filter(dw.met.rare.dada2, Niche %in% c("Leaves"))
+host.met.split.leaves <- subset(host.met.split.leaves, select = -c(Niche))
+host.met.split.leaves.final <- host.met.split.leaves[,colSums(host.met.split.leaves[])>0]
+
+host.met.split.stem <- filter(dw.met.rare.dada2, Niche %in% c("Stem"))
+host.met.split.stem <- subset(host.met.split.stem, select = -c(Niche))
+host.met.split.stem.final <- host.met.split.stem[,colSums(host.met.split.stem[])>0]
+
+
+#making objects that are simply character lists of the remaining column names (each of the remaining column names are the ASVs that are present in those samples)
+bark_names <- names(host.met.split.bark.final)
+stem_names <- names(host.met.split.stem.final)
+leaves_names <- names(host.met.split.leaves.final)
+roots_names <- names(host.met.split.roots.final)
+
+
+#making a list containing lists of each niches asv
+venn_data <- list(
+  Roots = roots_names,
+  Bark = bark_names,
+  Stem = stem_names,
+  Leaves = leaves_names
+)
+
+# construct the venn digram 
+hostvenn <- ggvenn(
+  venn_data,
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+# save venndiagram image
+ggsave(hostvenn, file="finalhostvenn.png", path = "/Users/taylorsawyer/Desktop/")
+
+# construct a list to build a venndiagram showing the above ground niches (bark, stem, leaves)
+above <- list(
+  Bark = bark_names,
+  Stem = stem_names,
+  Leaves = leaves_names
+)
+
+# construct a venndiagram of the above ground host
+ggvenn(above)
+
+#finding the names of the ASVs that are present in all host niches in control and burn
+host_core_ITS <- Reduce(intersect, list(leaves_names, roots_names, stem_names, bark_names))
+
+# save the asv information in a data frame
+host_core_ITS <- as.data.frame(host_core_ITS)
+
+# add mock data to be able to merge taxa information with asv information by row names 
+host_core_ITS$new <- c(1:7)
+
+# adjust row names
+host_core_ITS <- data.frame(host_core_ITS, row.names = 1)
+
+#changing taxa data frame so the ASVs in the exact same format for the row names
+# duplicate data frame for data manipulation 
+unfiltered_taxa <- unfiltered_taxonomy_fungal
+
+# adjust row names of taxa
+rownames(unfiltered_taxa)<-gsub(" ",".",rownames(unfiltered_taxa))
+rownames(unfiltered_taxa)<-gsub("_",".",rownames(unfiltered_taxa))
+
+#adjust row names of asvs
+rownames(host_core_ITS)<-gsub("_",".",rownames(host_core_ITS))
+
+#merging the two to get the names of the taxa that are present in all niches
+host_core_ITS_taxa <- merge(host_core_ITS, filtered_taxonomy, by="row.names")
+host_core_ITS_taxa = subset(host_core_ITS_taxa, select = -c(new))
+
+#changing the row names, eliminating superfluous column
+host_core_ITS_taxa <- data.frame(host_core_ITS_taxa, row.names = 1)
+```
+
+# Fungi Heat Map
+```{r}
+# remove the niche character information within our new df
+fungiasv <- subset(dw.met.rare.dada2, select = -c(Niche))
+
+#transpose the new df
+t.fungiasv <- t(fungiasv)
+
+#adjust the rownames to be in the correct format
+rownames(t.fungiasv)<-gsub("_",".",rownames(t.fungiasv))
+
+# remove class identification labeling
+unfiltered_taxa$Class <- gsub(x = unfiltered_taxa$Class, pattern = "c__", replacement = "")  
+
+# save taxa as a matrix
+taxmat<-as.matrix(unfiltered_taxa)
+
+# save asv as a matrix (names OTU for physeq purposes)
+otumat<-as.matrix(t.fungiasv)
+
+# prepare for phyloseq
+OTU<-otu_table(otumat,taxa_are_rows = TRUE)
+TAX<-tax_table(taxmat)
+
+# view new objects
+OTU
+TAX
+
+# use physeq to with our taxa and ASV object information 
+physeq<-phyloseq(OTU,TAX)
+
+# view new object
+physeq
+
+# Transform to compositional abundances
+pseq.rel <- microbiome::transform(physeq, "compositional")
+
+# Pick the core (>0.3% relative abundance in >50% of the samples)
+pseq.core <- core(pseq.rel, detection = 0.1/100, prevalence = 50/100)
+pseq.core2<-aggregate_rare(pseq.rel,"Class", detection = 0, prevalence = .3)
+core.taxa <- taxa(pseq.core2)
+
+# set prevalences and detections
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(5e-3), log10(.2), length = 10), 3)
+
+# plot the host core microbiome 
+heatmap.host.only <- plot_core(pseq.core2, plot.type = "heatmap", colours = rev(brewer.pal(5, "Spectral")), prevalences = prevalences, detections = detections, min.prevalence = .3) +
+  xlab("Detection Threshold (Relative Abundance)") +
+  theme(axis.text.y=element_text(size=8), axis.text.x = element_text(size = 8))
+heatmap.host.only
+
+# save new figure
+ggsave(heatmap.host.only, file="finalhostheat.png", path = "/Users/taylorsawyer/Desktop/")  
+
+```
+
