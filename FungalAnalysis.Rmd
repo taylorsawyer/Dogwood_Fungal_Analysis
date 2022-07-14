@@ -260,6 +260,25 @@ host_core_ITS_taxa = subset(host_core_ITS_taxa, select = -c(new))
 #changing the row names, eliminating superfluous column
 host_core_ITS_taxa <- data.frame(host_core_ITS_taxa, row.names = 1)
 ```
+# Reformat for funguild
+```{r}
+#transpose the data frame containing the removed, rarefied samples and without the soil niche data
+t.new <- t(new)
+
+# adjust row names
+rownames(t.new)<-gsub("_",".",rownames(t.new))
+
+# merge the transposed asv/sample table with the host core taxa
+hostcorecount<-merge(host_core_ITS_taxa, t.new, by="row.names")
+
+# condense taxonomic information into one column
+hostcorecombined <- unite(hostcorecount, col = 'Taxonomy', Kingdom, Phylum, Class, Order, Family, Genus, Species, sep = ",", remove = TRUE)
+
+# adjust column naming
+colnames(hostcorecombined2)<-gsub("X","",colnames(hostcorecombined2))
+
+# save as xlsx file for funguild
+write.xlsx(hostcorecombined, "hostcore_funguildprep.xlsx")
 
 # Fungi Heat Map
 ```{r}
