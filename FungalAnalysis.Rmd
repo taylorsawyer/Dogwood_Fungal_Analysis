@@ -279,6 +279,7 @@ colnames(hostcorecombined2)<-gsub("X","",colnames(hostcorecombined2))
 
 # save as xlsx file for funguild
 write.xlsx(hostcorecombined, "hostcore_funguildprep.xlsx")
+```
 
 # Fungi Heat Map
 ```{r}
@@ -333,7 +334,6 @@ heatmap.host.only <- plot_core(pseq.core2, plot.type = "heatmap", colours = rev(
 heatmap.host.only
 
 # save new figure
-ggsave(heatmap.host.only, file="finalhostheat.png", path = "/Users/taylorsawyer/Desktop/")  
-
+ggsave(heatmap.host.only, file="finalhostheat.png", path = "/Users/taylorsawyer/Desktop/")
 ```
 
