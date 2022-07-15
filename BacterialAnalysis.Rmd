@@ -1,0 +1,308 @@
+---
+title: "DogwoodBacterialAnalysis"
+author: "Taylor Sawyer"
+date: '2022-07-15'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Libraries 
+```{r, eval = FALSE}
+library(dada2)
+library(ShortRead)
+library(Biostrings)
+library(vegan)
+library(plyr)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(ggvenn)
+library(phyloseq)
+library(microbiome)
+library(knitr)
+library(RColorBrewer)
+library(reshape)
+library(xlsx)
+```
+
+# Input Directory and Paths
+```{r}
+# Pathway for taxonomy table
+unfiltered_taxonomy <- read.table("/Users/taylorsawyer/Desktop/BiGG_Data/Dogwood_Experiment/Dogwood_Data/unfiltered_taxonomy_table.csv",header = TRUE, sep = ',')
+
+# Pathway for asv table  
+unfiltered_asv_bac <- read.table("/Users/taylorsawyer/Desktop/BiGG_Data/Dogwood_Experiment/Dogwood_Data/asv_table_unfiltered.txt",header = TRUE, sep = '\t')
+
+# Pathway for soil metadata 
+soil_nutrient_metadata <- "/Users/taylorsawyer/Desktop/BiGG_Data/Dogwood_Experiment/Dogwood_Data/soil_nutrient_metadata.csv"
+soil_nutrient_metadata <- read.delim(soil_nutrient_metadata)
+
+#Pathway for postburn 
+postburn_meta <- "/Users/taylorsawyer/Desktop/BiGG_Data/Dogwood_Experiment/Dogwood_Data/postburn_metadata_allniches.csv"
+postburn_meta <- read.delim(postburn_meta)
+```
+
+# Remove Soil Niche Data for Host Analysis
+```{r}
+# adjust row labeling on metadata  by removing the first row and making it the rownames
+reassigned.postburn <- postburn_meta[,-1]
+rownames(reassigned.postburn) <- postburn_meta[,1]
+
+# remove 16S identifier from sample col names
+rownames(unfiltered_asv_bac)<-gsub("16S","",rownames(unfiltered_asv_bac))
+
+
+# merge transposed asv table and postburn metadata by matching row names
+soiltable <- merge(unfiltered_asv_bac,reassigned.postburn, by="row.names")
+
+# remove soil information to leave just the host niche information (roots, stems, bark, and leaves)
+removesoiltable = filter(soiltable, Niche %in% c("Roots", "Stem","Bark", "Leaves"))
+
+### FINAL ASV TABLE without extraneous character metadata
+asv.tab.bac <- subset(removesoiltable, select = -c(Treatment, Niche, Tree, Plot))
+
+# adjust row names of seq.tab 
+asv.tab.bac = data.frame(asv.tab.bac, row.names = 1)
+
+```
+
+
+# Preparing for Taxonomy Filtering
+```{r}
+#transpose the ASV table so that taxonomy can be added
+t.asv.tab.bac <- t(asv.tab.bac)
+
+# save the transposed ASV as a data frame
+t.asv.tab.bac = as.data.frame(t.asv.tab.bac)
+
+# adjust row names of taxonomy
+unfiltered_taxonomy = data.frame(unfiltered_taxonomy, row.names = 1)
+
+# merge asv and taxa table together (before filtering)
+t.seqtab.tax.bac <-merge(t.asv.tab.bac,unfiltered_taxonomy, by="row.names")
+
+# remove 16S identifier from sample col names
+colnames(t.seqtab.tax.bac)<-gsub("16S","",colnames(t.seqtab.tax.bac))
+
+# adjust row names of seq.tab 
+t.seqtab.tax.bac = data.frame(t.seqtab.tax.bac, row.names = 1)
+colnames(t.seqtab.tax.bac)<-gsub("X","",colnames(t.seqtab.tax.bac))
+```
+
+# Taxonomy Filtering 
+```{r}
+# remove chloroplast data from merged table
+taxa.chloroplast.omit.bac <- t.seqtab.tax.bac[grep("Chloroplast",t.seqtab.tax.bac$Order,invert=TRUE),]
+
+# remove eukaryota data
+taxa.euk.omit.bac <-taxa.chloroplast.omit.bac[grep("Eukaryota",taxa.chloroplast.omit.bac$Kingdom,invert=TRUE),]
+
+# remove mitochondrial sequences
+taxa.mitochondria.omit.bac <- taxa.euk.omit.bac[grep("Mitochondria",taxa.euk.omit.bac$Family,invert=TRUE),]
+
+# remove NAs in data
+taxa.na.omit.bac<-taxa.mitochondria.omit.bac[-(which(is.na(taxa.mitochondria.omit.bac$Phylum))),]
+
+# save taxa information for all asv
+taxa.information.all.asv <- taxa.na.omit.bac[,c(81:87)]
+```
+
+# Data formatting for Vegan
+```{r}
+# This object contains only per sample ASV abundance data
+only.asv.tab.bac<-taxa.na.omit.bac[,1:(length(taxa.na.omit.bac)-7)]
+
+# tranpose that samples are row names for vegan
+t.only.asv.tab.bac <- t(only.asv.tab.bac)
+```
+
+# Building the Rarefaction
+```{r}
+#build rarefaction curve 
+asv.rarecurve.bac<-vegan::rarecurve(t.only.asv.tab.bac)
+
+# determine rarefication cutoff by removing samples with a low number of ASVs (removing samples with low sequencing region. decided to remove samples below the threshold)
+sort(colSums(only.asv.tab.bac))
+
+# rarefy based on a sequencing depth of 20800
+rare.asv.tab.bac <-as.data.frame(rrarefy(t.only.asv.tab.bac, sample= 20800))
+
+# subset the rarefied dataframe to remove unrarefied samples (those less than the minimum sequencing depth of 8000)
+rarefy_formatting<-function(rarefied_table,sample){
+  ds.rarefied<-as.data.frame(subset(rarefied_table, rowSums(rarefied_table)>=sample))
+  ds.rare.asv<-ds.rarefied[, colSums(ds.rarefied)>0]
+  return(ds.rare.asv)
+}
+
+# remove samples below this threshold
+new <- rarefy_formatting(rare.asv.tab.bac, 20800)
+
+# merge taxa information with rarefied samples by row name
+dw.met.rare.dada2<-merge(reassigned.postburn,new, by="row.names")
+
+```
+
+# Venn Diagram
+```{r}
+#removing extraneous metadata 
+dw.met.rare.dada2 = subset(dw.met.rare.dada2, select = -c(Treatment,Tree,Plot))
+
+# adjust row names to proper format
+rownames(dw.met.rare.dada2)<-make.names(dw.met.rare.dada2[,1])
+dw.met.rare.dada2 = subset(dw.met.rare.dada2, select = -c(Row.names))
+
+# remove the X character value from row names
+rownames(dw.met.rare.dada2)<-gsub("X","",rownames(dw.met.rare.dada2))
+
+#renaming data frame for data manipulation
+host.met.split<-dw.met.rare.dada2
+
+#splitting data frame into four new dataframes based on individual niche, then removing the niche column, then removing any zero-sum columns
+
+# separate rarefied data based on bark niche
+host.met.split.bark <- filter(dw.met.rare.dada2, Niche %in% c("Bark"))
+
+# remove niche character information 
+host.met.split.bark <- subset(host.met.split.bark, select = -c(Niche))
+
+# remove rows containing all 0's
+host.met.split.bark.final <- host.met.split.bark[,colSums(host.met.split.bark[])>0]
+
+# continue for remaining host niches
+host.met.split.roots <- filter(dw.met.rare.dada2, Niche %in% c("Roots"))
+host.met.split.roots <- subset(host.met.split.roots, select = -c(Niche))
+host.met.split.roots.final <- host.met.split.roots[,colSums(host.met.split.roots[])>0]
+
+host.met.split.leaves <- filter(dw.met.rare.dada2, Niche %in% c("Leaves"))
+host.met.split.leaves <- subset(host.met.split.leaves, select = -c(Niche))
+host.met.split.leaves.final <- host.met.split.leaves[,colSums(host.met.split.leaves[])>0]
+
+host.met.split.stem <- filter(dw.met.rare.dada2, Niche %in% c("Stem"))
+host.met.split.stem <- subset(host.met.split.stem, select = -c(Niche))
+host.met.split.stem.final <- host.met.split.stem[,colSums(host.met.split.stem[])>0]
+
+#making objects that are simply character lists of the remaining column names (each of the remaining column names are the ASVs that are present in those samples)
+bark_names <- names(host.met.split.bark.final)
+stem_names <- names(host.met.split.stem.final)
+leaves_names <- names(host.met.split.leaves.final)
+roots_names <- names(host.met.split.roots.final)
+
+
+#making a list containing lists of each niches asv
+venn_data <- list(
+  Roots = roots_names,
+  Bark = bark_names,
+  Stem = stem_names,
+  Leaves = leaves_names
+)
+
+# construct the venn digram 
+hostvenn <- ggvenn(
+  venn_data,
+  fill_color = c("#0073C2FF", "#EFC000FF", "#868686FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
+  )
+
+
+# construct a list to build a venndiagram showing the above ground niches (bark, stem, leaves)
+above <- list(
+  Bark = bark_names,
+  Stem = stem_names,
+  Leaves = leaves_names
+)
+
+# construct a venndiagram of the above ground host
+ggvenn(above)
+
+```
+
+# Analyze the taxa of host core microbiome 
+```{r}
+#finding the names of the ASVs that are present in all host niches in control and burn
+host_core_16S <- Reduce(intersect, list(leaves_names, roots_names, stem_names, bark_names))
+
+# save the asv information in a data frame
+host_core_16S <- as.data.frame(host_core_16S)
+
+# add mock data to be able to merge taxa information with asv information by row names 
+host_core_16S$new <- c(1:27)
+
+# adjust row names
+host_core_16S <- data.frame(host_core_16S, row.names = 1)
+
+#changing taxa data frame so the ASVs in the exact same format for the row names
+# duplicate data frame for data manipulation 
+unfiltered_taxa <- unfiltered_taxonomy
+
+#merging the two to get the names of the taxa that are present in all host niches
+host_core_16S_taxa <- merge(host_core_16S, unfiltered_taxa, by="row.names")
+host_core_16S_taxa = subset(host_core_16S_taxa, select = -c(new))
+
+#changing the row names, eliminating superfluous column
+host_core_16S_taxa <- data.frame(host_core_16S_taxa, row.names = 1)
+```
+
+# Bacterial Heat Map
+```{r}
+# remove the niche character information within our new df
+bacterialasv <- subset(dw.met.rare.dada2, select = -c(Niche))
+
+#transpose the new df
+t.bacterialasv <- t(bacterialasv)
+
+#adjust the rownames to be in the correct format
+rownames(t.bacterialasv)<-gsub("_",".",rownames(t.bacterialasv))
+
+# remove class identification labeling
+unfiltered_taxa$Class <- gsub(x = unfiltered_taxa$Class, pattern = "c__", replacement = "")  
+
+# save taxa as a matrix
+taxmat<-as.matrix(unfiltered_taxa)
+
+# save asv as a matrix (names OTU for physeq purposes)
+otumat<-as.matrix(t.bacterialasv)
+
+# prepare for phyloseq
+OTU<-otu_table(otumat,taxa_are_rows = TRUE)
+TAX<-tax_table(taxmat)
+
+# view new objects
+OTU
+TAX
+
+# use physeq to with our taxa and ASV object information 
+physeq<-phyloseq(OTU,TAX)
+
+# view new object
+physeq
+
+# Transform to compositional abundances
+pseq.rel <- microbiome::transform(physeq, "compositional")
+
+# Pick the core (>0.3% relative abundance in >50% of the samples)
+pseq.core <- core(pseq.rel, detection = 0.1/100, prevalence = 50/100)
+pseq.core2<-aggregate_rare(pseq.rel,"Class", detection = 0, prevalence = .3)
+core.taxa <- taxa(pseq.core2)
+
+# set prevalences and detections
+prevalences <- seq(.05, 1, .05)
+detections <- round(10^seq(log10(5e-3), log10(.2), length = 10), 3)
+
+# plot the host core microbiome 
+bacterial.heatmap.host.only <- plot_core(pseq.core2, plot.type = "heatmap", colours = rev(brewer.pal(5, "Spectral")), prevalences = prevalences, detections = detections, min.prevalence = .3) +
+  xlab("Detection Threshold (Relative Abundance)") +
+  theme(axis.text.y=element_text(size=8), axis.text.x = element_text(size = 8))
+
+# view bacterial host heatmap
+bacterial.heatmap.host.only
+
+# save new figure
+ggsave(heatmap.host.only, file="finalhostheat.png", path = "/Users/taylorsawyer/Desktop/")  
+```
+
