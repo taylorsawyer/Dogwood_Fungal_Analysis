@@ -137,10 +137,10 @@ sort(colSums(onlyasv.tab.fungal))
 # transpose the data frame 
 t.onlyasv.tab.fungal <- as.data.frame(t(onlyasv.tab.fungal))
 
-# rarefy based on a sequencing depth of 10000 
-rare.asv.tab.dw <-as.data.frame(rrarefy(t.onlyasv.tab.fungal, sample= 10000))
+# rarefy based on a sequencing depth of 8000 
+rare.asv.tab.dw <-as.data.frame(rrarefy(t.onlyasv.tab.fungal, sample= 8000))
 
-# subset the rarefied dataframe to remove unrarefied samples (those less than the minimum sequencing depth of 10000)
+# subset the rarefied dataframe to remove unrarefied samples (those less than the minimum sequencing depth of 8000)
 rarefy_formatting<-function(rarefied_table,sample){
   ds.rarefied<-as.data.frame(subset(rarefied_table, rowSums(rarefied_table)>=sample))
   ds.rare.asv<-ds.rarefied[, colSums(ds.rarefied)>0]
@@ -148,7 +148,7 @@ rarefy_formatting<-function(rarefied_table,sample){
 }
 
 # remove samples below this threshold
-new <- rarefy_formatting(rare.asv.tab.dw, 10000)
+new <- rarefy_formatting(rare.asv.tab.dw, 8000)
 
 # merge taxa information with rarefied samples by row name
 dw.met.rare.dada2<-merge(reassigned.postburn,new, by="row.names")
