@@ -1,6 +1,6 @@
 ---
 title: "DogwoodBacterialAnalysis"
-author: "Taylor Sawyer"
+author: "Taylor Sawyer and Isako Di Tomassi"
 date: '2022-07-15'
 output: html_document
 editor_options: 
