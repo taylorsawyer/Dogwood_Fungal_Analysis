@@ -4,6 +4,6 @@ The core microbiome, defined here as the microbial taxa and their functional att
 
 Contributers: 
 Taylor Sawyer*, Isako Di Tomassi*, Beant Kapoor, Aaron Onufrak, William Klingeman,
-Jennifer DeBruyn, Melissa Cregger, Emma Willcox, Denita Hadziabdic
+Jennifer DeBruyn, Melissa Cregger, Emma Willcox, Margaret Staton, Denita Hadziabdic
 
 *Co-first authors
